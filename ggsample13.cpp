@@ -47,6 +47,8 @@ const GgVector position{ 0.0f, 4.0f, 0.0f, 1.0f };
 // ワールド座標系の光源の目標位置
 const GgVector target{ 0.0f, 0.0f, 0.0f, 1.0f };
 
+const GLsizei fboWidth(1024), fboHeight(1024);
+
 // オブジェクトの描画
 //   shader: オブジェクトの描画に用いる GgSimpleShader 型のシェーダ
 //   mv: オブジェクトを描画する際の GgMatrix 型のビュー変換行列
@@ -95,7 +97,7 @@ void app()
   Window window("ggsample13");
 
   // 背景色を指定する
-  glClearColor(0.1f, 0.2f, 0.3f, 0.0f);
+  glClearColor(0.1f, 0.2f, 0.3f, 0.0f); 
 
   // 隠面消去を有効にする
   glEnable(GL_DEPTH_TEST);
@@ -103,6 +105,9 @@ void app()
 
   // 正像用のプログラムオブジェクト
   GgSimpleShader simple("ggsample13.vert", "ggsample13.frag");
+
+  // 鏡像用のプログラムオブジェクト
+  GgSimpleShader mirror("ggsample13mirror.vert", "ggsample13.frag");
 
   // 地面用のプログラムオブジェクト
   GgTileShader floor("ggsample13tile.vert", "ggsample13tile.frag");
@@ -128,6 +133,37 @@ void app()
   // 光源の材質
   const GgSimpleShader::LightBuffer light(lightProperty);
 
+  // カラーバッファ用のテクスチャを用意
+  GLuint cb;
+  glGenTextures(1, &cb);
+  glBindTexture(GL_TEXTURE_2D, cb);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fboWidth, fboHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  // デプスバッファ⽤のレンダーバッファを⽤意する
+  GLuint rb;
+  glGenRenderbuffers(1, &rb);
+  glBindRenderbuffer(GL_RENDERBUFFER, rb);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, fboWidth, fboHeight);
+
+  // 映り込み⽤のフレームバッファオブジェクトを作成する
+  GLuint fb;
+  glGenFramebuffers(1, &fb);
+  glBindFramebuffer(GL_FRAMEBUFFER, fb);
+  // FBO のカラーバッファにテクスチャを取り付ける
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, cb, 0);
+  // FBO のデプスバッファにレンダーバッファを取り付ける
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
+
+  // 鏡像のビュー変換⾏列を mr に求める
+  const GgMatrix mr(mv * ggScale(1.0f, -1.0f, 1.0f));
+  // 鏡像の視点座標系における光源位置
+  GLfloat reflect[4];
+  mr.projection(reflect, normal);
+
   // 経過時間のリセット
   glfwSetTime(0.0);
 
@@ -139,7 +175,29 @@ void app()
 
     // 投影変換行列
     const GgMatrix mp(ggPerspective(0.5f, window.getAspect(), 1.0f, 15.0f));
-    
+
+    // ビューポートをフレームバッファオブジェクトのサイズに合わせる
+    glViewport(0, 0, fboWidth, fboHeight);
+    // フレームバッファオブジェクトを結合する
+    glBindFramebuffer(GL_FRAMEBUFFER, fb);
+    // フレームバッファオブジェクトの画⾯消去
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // 鏡像⽤のシェーダの選択
+    light.loadPosition(reflect);
+    light.loadPosition(normal);
+    mirror.use(mp, light);
+
+    // 前⾯をカリングする
+    glCullFace(GL_FRONT);
+    // 鏡像をフレームバッファオブジェクトに描画
+    drawObjects(mirror, mr, object.get(), material, objects, t);
+    // 背⾯のカリングに戻す
+    glCullFace(GL_BACK);
+    // フレームバッファオブジェクトの結合を解除する
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // ビューポートをウィンドウのサイズに戻す
+    glViewport(0, 0, window.getWidth(), window.getHeight());
+
     // 画面消去
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -154,10 +212,12 @@ void app()
 
     // 床面用のシェーダの選択
     floor.use(light);
-    
+
     // 床面の描画
     floor.loadMatrix(mp, mv.rotateX(-1.5707963f));
     tile.select();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, cb);
     rectangle->draw();
 
     // カラーバッファを入れ替えてイベントを取り出す
